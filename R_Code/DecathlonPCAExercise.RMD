@@ -1,0 +1,118 @@
+---
+pdf_document: default
+title: "Decathlon PCA Exercise"
+author: "Eli Cook"
+abstract: 
+output: pdf_document
+---
+***
+
+```{r "setup", include=FALSE}
+#This block of code will not appear in your knitted document
+#Setup paths for data and Rcode
+require("knitr")
+sourcedir <-"C:/Users/ucg8nb/OneDrive - University of Virginia/SYS 4021/R_Code"
+opts_knit$set(root.dir = sourcedir)
+opts_chunk$set(warning=FALSE)
+```
+
+Source files & load and clean data
+```{r}
+setwd(sourcedir)
+source("PCAplots.R")
+
+library(ade4)
+
+# load olympic dataset with decathlon data
+data(olympic)
+
+# create a data frame with the decathlon data
+decathlon.data <- olympic$tab
+decathlon.data$score <- olympic$score
+
+# change French event names to English
+names(decathlon.data)[names(decathlon.data) == "long"] <- "long_jump"
+names(decathlon.data)[names(decathlon.data) == "poid"] <- "shot_put"
+names(decathlon.data)[names(decathlon.data) == "haut"] <- "high_jump"
+names(decathlon.data)[names(decathlon.data) == "110"] <- "110_hurdles"
+names(decathlon.data)[names(decathlon.data) == "disq"] <- "discus"
+names(decathlon.data)[names(decathlon.data) == "perc"] <- "pole_vault"
+names(decathlon.data)[names(decathlon.data) == "jave"] <- "javelin"
+  
+```
+
+1. Describe this dataset. What are the variables and what are the different observations? What relationships would you expect from this dataset?
+
+The variables are different events in the decathlon, and the observations are each athlete performing for one meet. I would expect certain events to score similarly, for instance all the throwing events would be higher or lower.
+
+2. Now look at your data using scatter plot matrices.
+```{r}
+library(psych)
+pairs.panels(decathlon.data)
+```
+3. Which features are strongly correlated? Which are most predictive of score?
+
+Discus and shotput are highly correlated, and the pole vault and the score are highly correlated.
+
+4. Now create principal components with both the covariance and correlation matrices.
+```{r}
+pca.cov = princomp(decathlon.data)
+pca.cor = princomp(decathlon.data, cor = T)
+```
+
+5. Create a biplot of your data for both the covariance and correlation matrices
+```{r}
+cov_biplot <- ggbiplot(pca.cov, labels=row(decathlon.data)[,1])
+cor_biplot <- ggbiplot(pca.cor, labels = row(decathlon.data)[,1])
+ggarrange(cov_biplot, cor_biplot, ncol = 2, nrow = 1)
+```
+
+6. What do you notice about the biplots with the 2 methods?
+
+With the covariance biplot, almost all of the vairance is explained by the score, but with the correlation biplot there is much less variance explained by score. 
+
+From here on out, use the correlation matrix.
+
+7. Describe the relationships between the different variables. What do they imply about which decathlon events require similar or different strengths? (Note: In some events you want high scores, and in some events you want low scores.)
+
+Also the running events are more closely related, while the throwing events are clustered, and the jumping events are clustered too. The running events are across from the jumping events, which makes sense because the running events goal times are lower, and the jumping event goal distances are higher, so the opposite correlation means that the better runners (lower time) are better jumpers (further distances).
+
+8. Create a screeplot.
+```{r}
+ggscreeplot(pca.cor)
+```
+
+9. How many components do the graphs suggest is sufficient to explain most of the variation in the data? (Hint: consider the first method for choosing the number of PCs described in the slides.)
+
+I would say that around 3 components is sufficient to explain most of the variation, because there is a kink in the graph around then.
+
+10. Create a cumulative variance plot.
+```{r}
+cumplot(pca.cor)
+cumsumplot <- cumplot(pca.cor)
+
+cumsumplot$cumvar
+```
+
+11. How many principal components do you need to explain at least 80% of the variance?
+
+We need 4 pricinple components to explain at least 80% of the variance
+
+12. Plot the loadings in the first 2 PCS.
+```{r}
+loadplot.cor <- loadingsplot(pca.cor)
+loadplot.cor
+loadplot.cor$loadings
+```
+
+13. Which 5 variables explain most of the variability in the first PC and how are they related to each other?
+
+Score, 110 hurdles, pole_vault, 100, and long_jump. They are related to each other because they generally require good 100 meter speed. For the 100 and 110 hurdles this is straight forward to explain, and for the pole_vaule and long_jump, atheletes need to be able to run quickly towards their jump. The score relates to everything because the higher (or lower in the case of running time) something is the higher the score is.
+
+14. Which 5 variables explain most of the variability in the second PC and how are they related to each other?
+
+For the second PC, the 1500, discus, shotput, 400 and javalin were the most important. In this list there are three throwing events, and the two longest distance running events.
+
+15. Based on all of the analyses above, which events do you think are most important to an athlete's decathlon score?
+
+I think that the 100, long jupm, pole vault and maybe the hurdles are the most important to an athlete's score, as they are the most important in the first PCA.

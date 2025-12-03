@@ -1,0 +1,282 @@
+---
+title: "Project 2"
+author: "Hunter Oakey, Liam Tuohy, Emre Sahin, Eli Cook"
+date: "Date"
+output: pdf_document
+pdf_document: default
+---
+***
+```{r "setup", include=FALSE}
+require("knitr")
+
+#MAKE SURE TO CHANGE
+sourcedir <- "C:/Users/ucg8nb/OneDrive - University of Virginia/SYS 4021/R_Code"
+datadir <- "C:/Users/ucg8nb/OneDrive - University of Virginia/SYS 4021/Data"
+
+
+
+opts_knit$set(root.dir = sourcedir)
+library(forecast)
+library(mtsdi)
+library(MTS)
+library(ggplot2)
+library(tidyverse)
+library(lubridate)
+library("car")
+library(ggfortify)
+library(ggpubr)
+library(tseries)
+
+set.seed(200)
+```
+
+# 1. Building Univariate Time Series Models of NO2 Data
+
+## 1.1 Load data and impute missing values
+```{r}
+setwd(datadir)
+
+airquality = read.csv('AirQualityUCI.csv')
+
+# replace -200 with NA
+airquality[airquality == -200] <- NA
+
+# convert integer type to numeric
+intcols = c(4,5,7,8,9,10,11,12)
+for(i in 1:length(intcols)){
+  airquality[,intcols[i]] <- as.numeric(airquality[,intcols[i]])
+}
+
+setwd(sourcedir)
+
+# create new data frame with just CO and NO2
+AQdata = airquality[,c(3,10)]
+
+# impute missing air quality data
+f <- ~ CO.GT. + NO2.GT.
+t <- c(seq(1,dim(AQdata)[1],1))
+i <- mnimput(f, AQdata, eps=1e-3, ts=TRUE, method='gam', ga.control=list(formula=paste(names(AQdata)[c(1:2)],'~ns(t,2)')))
+
+# set airquality to imputed data
+AQdata <- i$filled.dataset
+
+# aggregate to daily maxima for model building
+dailyAQ <- aggregate(AQdata, by=list(as.Date(airquality[,1],"%m/%d/%Y")), FUN=max)
+```
+
+## 1.2 Examining Time Series and Seasonal Components
+```{r}
+NO2.ts <- ts(dailyAQ$NO2.GT.)
+autoplot(NO2.ts)
+time.temp <- c(1:(length(NO2.ts)-7))
+```
+Looking at this autoplot we can see a few things we will need to correct in the data. Firstly, there appears to be seasonality, or at the very least some cyclical components, so we'll start investigating by looking at a periodogram, and finding the maximum period.
+```{r}
+pg.NO2 <- spec.pgram(NO2.ts,spans=9,demean=T,log='no')
+spec.NO2 <- data.frame(freq=pg.NO2$freq, spec=pg.NO2$spec)
+
+max.omega.NO2 <- pg.NO2$freq[which(pg.NO2$spec==max(pg.NO2$spec))]
+max.omega.NO2
+```
+From this we can see the maximum spike at 0.00591, however this is likely due to autocorrelation or red noise as the spike is very close to 0. Because of this we want to investigate the other large spikes that we can see, so we'll get a list of the highest periods in order to see what the second spike is.
+```{r}
+sorted.spec <- sort(pg.NO2$spec, decreasing=T, index.return=T)
+sorted.omega <- pg.NO2$freq[sorted.spec$ix]
+sorted.Ts <- 1/pg.NO2$freq[sorted.spec$ix]
+
+#sorted.omega[1:50]
+sorted.Ts[1:50]
+```
+We can see that the second most important period, aside from the one near 0, in the periodogram is at nearly 7, which would correspond with a full week. This would make sense as it follows a typical work schedule; emissions might have some relationship with how and when people go to work as, result of transportation for example. Because of this we'll account for a season of length 7 days. There is another peak around a period of 3.5, which would likely be a harmonic of the 7-day peak. Thus, it will also be accounted for. (Everything leading up to the 7-day peak will be assumed to be red noise from potential autocorrelation components.)
+
+## 1.3 Accounting for Seasonality
+We'll start by using sinusoidal functions to model the 24 hour season along with the first two harmonics.
+```{r}
+NO2.season <- lm(NO2.ts[time.temp] ~ sin(2*pi*time.temp/7) + cos(2*pi*time.temp/7) + sin(2*pi*time.temp/3.5) + cos(2*pi*time.temp/3.5))
+summary(NO2.season)
+```
+With this model we'll make sure the residuals look good as far as seasonality goes, and, for further changes, whether there is a trend we need to account for.
+```{r}
+e.NO2.season <- ts(NO2.season$residuals)
+pg.e.NO2 <- spec.pgram(e.NO2.season,spans=9,demean=T,log='no')
+spec.e.NO2 <- data.frame(freq=pg.e.NO2$freq, spec=pg.e.NO2$spec)
+autoplot(e.NO2.season)
+```
+From here we can see that the periodogram looks much better, so we'll say we have accounted for seasonality. However, there still appears to be a trend in the data, as well as other non-seasonality components, so we need to investigating further.
+
+To start, we will try to verify this model with a few diagnostics.
+```{r}
+# Model diagnostics for temp.trend.seasonal
+autoplot(NO2.season, which = c(1,2,4), labels.id = NULL)
+```
+The residuals vs. fitted shows that there appears to be an increasing variance in the residuals, indicating that other factors or components, as discussed above, may need to be considered; the QQ plot shows that, although the bottom tail is a little off, the residuals are relatively Normal; the Cook's Distance plot shows that there are no influential points as none of the points have Cook's Distances above 0.5. To try to account for what we see in these diagnostics, especially for the residuals vs. fitted plot, we will start by accounting for trend.
+
+## 1.4 Accounting for Trends
+```{r}
+ggAcf(e.NO2.season)
+```
+The above ACF of the seasonality model shows near-linear decay, indicating that a trend still needs to be accounted for. 
+
+To account for trends, we will look at differencing the time series. (Because we will difference rather than adding a time component, running diagnostics on this investigation will not be done until later, once we account for other components.)
+```{r}
+e.NO2.season.diff <- diff(e.NO2.season)
+autoplot(e.NO2.season.diff)
+```
+After differencing we see that the autoplot looks much more stationary, so we'll take the series with one difference. We do not want to difference more because that might lead to over-differencing, which may remove features that would otherwise be accounted for by autoregressive or moving average components.
+
+## 1.5 Determining Autoregressive and Moving Average Components
+We will now examine different ARIMA models to model the errors from the differencing model. First we'll take a look at the ACF and PACF.
+```{r}
+ggAcf(e.NO2.season.diff)
+ggPacf(e.NO2.season.diff)
+```
+At this point both the ACF and PACF look sinusoidal and decaying, so this is probably some form of an ARIMA model. From here, we will create ARIMA models and compare it to an auto-ARIMA model. The former will be referencing the fact that the ACF cuts off after one lag and the PACF cuts off after 2, and the latter will be generated by R.
+
+## 1.6 Generating Residuals Models to Account for AR and MA components
+Based on our ACF and PACF discussion above, we will create three ARIMA models based on differencing the model's residuals, meaning p=1, d=1, and q=2. As shown below, one model will have p=0 and another will have q=0, just in case our p and q values were determined in some way incorrectly. 
+```{r}
+ARIMA110 <- arima(e.NO2.season, c(1,1,0), include.mean = FALSE)
+ARIMA012 <- arima(e.NO2.season, c(0,1,2), include.mean = FALSE)
+ARIMA112 <- arima(e.NO2.season, c(1,1,2), include.mean = FALSE)
+summary(ARIMA110)
+summary(ARIMA012)
+summary(ARIMA112)
+``` 
+From the AIC, because it is lowest, we can see that the ARIMA(1,1,2) model performs better than the the ARIMA(1,1,0) and ARIMA(0,1,2) models. As mentioned, we will also create an auto-ARIMA model (which we will also give the non-differenced series) to see what else could be generated. 
+```{r}
+NO2auto <- auto.arima(e.NO2.season, approximation = FALSE)
+summary(NO2auto)
+```
+We can see that auto.arima() does an ARIMA(1,1,2) model, implying that the auto model agrees with our third residuals model; a single differencing was enough to make the time series stationary and the p and q values chosen above are adequate. Thus, we will treat this as equivalent to our ARIMA(1,1,2) model. Regardless, we will assess the diagnostics and forecasting abilities of each of these models before choosing one in particular.
+
+## 1.7 Diagnostics of Residuals Models
+From here we will perform diagnostics on the mean and variance of residuals and residual Gaussianity, using residuals vs. fitted and QQ plots. 
+
+```{r}
+# assess residuals vs. fitted
+model1 = ggplot() + geom_point(aes(x=fitted(ARIMA110), y=ARIMA110$residuals)) + ylim(-120,120) + xlim(-120,120) + ggtitle("ARIMA110")
+model2 = ggplot() + geom_point(aes(x=fitted(ARIMA012), y=ARIMA012$residuals)) + ylim(-120,120) + xlim(-120,120) + ggtitle("ARIMA012")
+model3 = ggplot() + geom_point(aes(x=fitted(ARIMA112), y=ARIMA112$residuals)) + ylim(-120,120) + xlim(-120,120) + ggtitle("ARIMA112")
+
+ggarrange(model1, model2, model3, ncol=1, nrow=3)
+
+# assess normality of residuals
+model1 = qplot(sample=ARIMA110$residuals) + stat_qq_line(color="red") + ggtitle("ARIMA110")
+model2 = qplot(sample=ARIMA012$residuals) + stat_qq_line(color="red") + ggtitle("ARIMA012")
+model3 = qplot(sample=ARIMA112$residuals) + stat_qq_line(color="red") + ggtitle("ARIMA112")
+
+ggarrange(model1, model2, model3, ncol=1, nrow=3)
+
+```
+From the above we can see that the residuals are close to zero and close to constant in variance and that they are close to Gaussian, although the upper tail is is a bit off; we will assume that these models are adequate given these diagnostics. An important thing to note is that the residuals vs. fitted and the QQ plots are all similar to each other between each model, so we will have to further assess these.
+
+We'll next plot the ARIMA diagnostics to check for residual independence for these three models for 20 lags.
+```{r}
+ggtsdiag(ARIMA110, gof.lag = 20)
+ggtsdiag(ARIMA012, gof.lag = 20)
+ggtsdiag(ARIMA112, gof.lag = 20)
+```
+
+We can see from the Ljung-Box test that the ARIMA(1,1,0) model fails the test after 1 lag whereas every other model succeeds for all 20 lags. Given this, we will likely disregard this model. From here, we will now consider the forecasting abilities of each of these models.
+
+This is the MSE for the ARIMA(1,1,2) model:
+```{r}
+arima112.forecast <- forecast(ARIMA112, h = 7)
+newtime.temp <- c((length(NO2.ts)-6):(length(NO2.ts)))
+newdata <- data.frame(time.temp = newtime.temp, temp = NO2.ts[newtime.temp])
+seasonal.pred <- predict(NO2.season, newdata = newdata)
+next7daypred <- seasonal.pred + arima112.forecast$mean
+mean((next7daypred - newdata$temp)^2)
+```
+
+This is the MSE for the ARIMA(0,1,2) model:
+```{r}
+arima012.forecast <- forecast(ARIMA012, h = 7)
+next7daypred.2 <- seasonal.pred + arima012.forecast$mean
+mean((next7daypred.2 - newdata$temp)^2)
+```
+
+Lastly, this is the MSE for the ARIMA(1,1,0) model:
+```{r}
+arima110.forecast <- forecast(ARIMA110, h = 7)
+next7daypred.2 <- seasonal.pred + arima110.forecast$mean
+mean((next7daypred.2 - newdata$temp)^2)
+```
+
+From these, ultimately, we will choose the ARIMA(0,1,2) model based on its forecasting ability, having the smallest MSE out of all of these models. In terms of overall diagnostics and metrics, both this model and the ARIMA(1,1,2) model performed better than the ARIMA(1,1,0) model. The only noticeable difference in these two models is the performance on the Ljung-Box test, but both passed as being adequate, so we will choose the ARIMA(0,1,2) simply because of its lower MSE of 421.3872.
+
+Ultimately this gives us a model that incorporates seasonality by adding sinusoidal components, trend through differencing the data once, and moving average components, with the latter two components being accounted for using an ARIMA(0,1,2) residuals model.
+
+Here is the plot of this final model against the actual data for those last 7 days.
+```{r}
+plot(ts(newdata$temp), type = 'o', ylim = c(50,300))
+lines(ts(next7daypred),col = 'red', type = 'o')
+lines(1:7, seasonal.pred + arima012.forecast$lower[,2], col = 'red', lty = 'dashed')
+lines(1:7, seasonal.pred + arima012.forecast$upper[,2], col = 'red', lty = 'dashed')
+legend(1,60, legend = c('Actual', "Predicted"), lwd = 2, col = c('black', 'red'))
+```
+
+# Simulation of Univariate Time Series Data
+
+## 1.1 Visually Comparing Simulated Data with Original Data
+
+```{r}
+# Simulation
+ARIMA012.sim <- arima.sim(n=365, list(order=c(0,1,2), ma=c(ARIMA012$coef[1],ARIMA012$coef[2])),
+                           sd=sqrt(ARIMA012$sigma2))
+
+# Add mean predictions and plot simulation of Tmin
+time.yr <- c(1:365)
+time.yr.df <- data.frame(time.temp = time.yr)
+
+temp.yr.predictions <- predict(NO2.season, newdata=time.yr.df)
+
+final.sim.ts = ts(temp.yr.predictions + ARIMA012.sim)
+
+# plot simulated temperatures
+time.temp.365 = c(1:365)
+
+ggplot() + geom_line(aes(x=time.temp.365,y=final.sim.ts[1:length(time.temp.365)],color="Simulated")) +
+  geom_line(aes(x=time.temp.365,y=NO2.ts[1:length(time.temp.365)],color="Real")) + xlab("Time") + 
+  ylab("Richmond Tmin")
+```
+
+Using a seed of 200, ADD TEXT TO VISUALLY COMPARE
+
+## 1.2 Reproducing Observed Trend of Time Series
+We'll start this by creating a model for trends and seasonality for the original model
+```{r}
+time.temp <- c(1:(length(NO2.ts)))
+NO2.trendseason <- lm(NO2.ts[time.temp] ~ time.temp + sin(2*pi*time.temp/7) + cos(2*pi*time.temp/7) + sin(2*pi*time.temp/3.5) + cos(2*pi*time.temp/3.5))
+```
+
+Next we'll create a model for trends and seasonality for the new time series. We'll look at the periodogram for the simulated series to check whether seasonality is the same, and look at the top 20 values.
+```{r}
+pg.NO2.sim <- spec.pgram(final.sim.ts,spans=9,demean=T,log='no')
+spec.NO2.sim <- data.frame(freq=pg.NO2.sim$freq, spec=pg.NO2.sim$spec)
+
+sorted.spec <- sort(pg.NO2.sim$spec, decreasing=T, index.return=T)
+sorted.omega <- pg.NO2.sim$freq[sorted.spec$ix]
+sorted.Ts <- 1/pg.NO2.sim$freq[sorted.spec$ix]
+
+#sorted.omega[1:20]
+sorted.Ts[1:50]
+```
+We can see that numbers very close to 7 and 3.5 appear a lot, so we'll assume the seasonality of the new model is similar enough for creating our trends on the new model. 
+```{r}
+NO2.trendseason.sim <- lm(final.sim.ts[time.temp] ~ time.temp +  sin(2*pi*time.temp/7) + cos(2*pi*time.temp/7) + sin(2*pi*time.temp/3.5) + cos(2*pi*time.temp/3.5))
+```
+We'll compare these two models, specifically the coefficient on time.temp.
+```{r}
+summary(NO2.trendseason)
+summary(NO2.trendseason.sim)
+```
+We get a time.temp coefficient of 0.24789 for the original data and a time.temp coefficient 0.29602 for the simulated data. This means that the simulated trend coefficient was a 19.41% increase from the original coefficient.
+
+## 1.3 Reproducing Observed Seasonality of Time Series
+
+## 1.4 Reproducing Observed Mean and Variance of Time Series
+
+## 1.5 Reproducing Observed Autocorrelation of Time Series
+
+

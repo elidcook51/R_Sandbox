@@ -1,0 +1,101 @@
+---
+pdf_document: default
+title: "Class Survey Exercise"
+author: "Eli Cook"
+abstract: 
+output: pdf_document
+---
+***
+
+```{r "setup", include=FALSE}
+#This block of code will not appear in your knitted document
+#Setup paths for data and Rcode
+require("knitr")
+sourcedir <-"C:/Users/ucg8nb/OneDrive - University of Virginia/SYS 4021/R_Code"
+opts_knit$set(root.dir = sourcedir)
+opts_chunk$set(warning=FALSE)
+library(tidyverse)
+library(dplyr)
+```
+
+Source files & load and clean data
+```{r}
+datadir <- "C:/Users/ucg8nb/OneDrive - University of Virginia/SYS 4021/Data"
+setwd(datadir)
+
+class.data <- read.csv("Class_Survey_Data.csv")
+summary(class.data)
+class.data <- class.data %>% rename(row = Which.row.are.you.sitting.in., height = How.tall.are.you...inches., gender = What.is.your.sex., virginia = Are.you.from.Virginia., gradSchool = Do.you.want.to.go.to.grad.school., consultant = Do.you.want.to.be.a.consultant., mileTime = How.fast.do.you.think.you.can.you.run.a.mile...seconds., distance = How.many.miles.do.you.live..during.the.school.year..from.Olsson.Hall...use.a.mapping.software.to.estimate., transportMode = How.do.you.get.to.Grounds., languageNum = How.many.languages.do.you.speak., movieGenre = What.s.your.favorite.movie.genre., videoGames = Do.you.play.video.games.)
+class.data.accurate.mile.times <- class.data %>% filter(mileTime > 223 & mileTime < 3600)
+class.data.accurate.mile.times$videoGames
+class.data.accurate.mile.times$videoGames <- as.factor(class.data.accurate.mile.times$videoGames)
+class.data.accurate.mile.times$gender <- as.factor(class.data.accurate.mile.times$gender)
+```
+
+1. Formulate a hypothesis about this data.
+
+I hypothesize that people who play video games run 1 mile slower
+
+
+2. Now visualize your data to see if this hypothesis appears to be true.
+This hypthesis does apprear to be true
+```{r}
+ggplot(class.data.accurate.mile.times, aes(mileTime)) +
+  geom_boxplot(fill = "steelblue") +
+  ggtitle("Box plot of mile times by whether they play video games") +
+  facet_wrap(~videoGames)
+
+```
+
+
+3. What if you used convenience sampling and only surveyed the first 3 rows? Would your inferences change? 
+If we only sample the first three rows, we still find that people who play video games are faster, on average, then those who don't
+```{r}
+selectedGroup <- class.data.accurate.mile.times %>% filter(row %in% c(0,1,2,3))
+ggplot(selectedGroup, aes(mileTime)) +
+  geom_boxplot(fill = "steelblue") +
+  ggtitle("Box plot of mile times by whether they play video games") +
+  facet_wrap(~videoGames)
+```
+
+
+4. Randomly sample 30 students. Do you come to the same conclusions as with the full dataset?
+While it is closer with this random sample, the conclusions don't change here either
+```{r}
+set.seed(1)
+selectedGroup <- class.data.accurate.mile.times %>% sample_n(30)
+ggplot(selectedGroup, aes(mileTime)) +
+  geom_boxplot(fill = "steelblue") +
+  ggtitle("Box plot of mile times by whether they play video games") +
+  facet_wrap(~videoGames)
+```
+
+
+5. Randomly sample 15 male students and 15 female students. Do you come to the same conclusions as with the full dataset?
+Our conclusions don't change
+```{r}
+class.data.accurate.mile.times$gender
+maleGroup <- class.data.accurate.mile.times %>% filter(gender == "Male") %>% sample_n(15)
+femaleGroup <- class.data.accurate.mile.times %>% filter(gender == "Female") %>% sample_n(15)
+sampleGroup <- rbind(maleGroup, femaleGroup)
+ggplot(selectedGroup, aes(mileTime)) +
+  geom_boxplot(fill = "steelblue") +
+  ggtitle("Box plot of mile times by whether they play video games") +
+  facet_wrap(~videoGames)
+```
+
+
+6. (Only answer if your hypothesis was not about Sex) Does your conclusion about your hypothesis differ when using the whole dataset vs. just males or just females?
+For males, mile times don't change much whether they play video games or not, the median time appears to be 420 for both, whereas for females playing video games it changes drastically with females who play video games running significantly faster mile times then those who don't.
+```{r}
+maleGroup <- class.data.accurate.mile.times %>% filter(gender == "Male")
+femaleGroup <- class.data.accurate.mile.times %>% filter(gender == "Female")
+ggplot(maleGroup, aes(mileTime)) +
+  geom_boxplot(fill = "steelblue") +
+  ggtitle("Box plot of mile times by whether they play video games for males") +
+  facet_wrap(~videoGames)
+ggplot(femaleGroup, aes(mileTime)) +
+  geom_boxplot(fill = "steelblue") +
+  ggtitle("Box plot of mile times by whether they play video games for females") +
+  facet_wrap(~videoGames)
+```

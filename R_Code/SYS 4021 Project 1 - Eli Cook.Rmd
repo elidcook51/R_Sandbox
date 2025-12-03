@@ -1,0 +1,225 @@
+---
+title: "SYS 4021 Project 1 - Eli Cook"
+output: pdf
+---
+
+We'll set up the dataframe for accident damage with the following code:
+
+Directories and library importing
+```{r}
+traindir <- "C:/Users/ucg8nb/OneDrive - University of Virginia/SYS 4021/Data/TrainData"
+sourcedir <-"C:/Users/ucg8nb/OneDrive - University of Virginia/SYS 4021/R_Code"
+library(here)
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+library(ggfortify)
+library(MASS)
+library(lindia)
+library(olsrr)
+library(data.table)
+library(plyr)
+library(scales)
+library(grid)
+library(psych)
+library(lattice)
+library(car)
+setwd(sourcedir)
+source('AccidentInput.R')
+source('PCAplots.R')
+```
+
+Here is where the actual data is created:
+```{r}
+# Load a list of data frames for each year of accident data
+acts <- file.inputl(traindir)
+
+# combine into one data frame
+totacts <- combine.data(acts)
+
+# setup categorical variables
+totacts$TYPE <- factor(totacts$TYPE, labels = c("Derailment", "HeadOn", 
+                                                "Rearend", "Side", "Raking", "BrokenTrain", "Hwy-Rail", 
+                                                "GradeX", "Obstruction", "Explosive", "Fire","Other",
+                                                "SeeNarrative" ))
+
+totacts$TYPEQ <- factor(totacts$TYPEQ, labels = c("NA", "Freight", "Passenger", "Commuter", 
+                                                  "Work",  "Single", "CutofCars", "Yard", "Light", "Maint",
+                                                  "MaintOfWay", "Passenger", "Commuter", "ElectricMulti", "ElectricMulti"))
+
+totacts$Cause <- rep(NA, nrow(totacts))
+
+totacts$Cause[which(substr(totacts$CAUSE, 1, 1) == "M")] <- "M"
+totacts$Cause[which(substr(totacts$CAUSE, 1, 1) == "T")] <- "T"
+totacts$Cause[which(substr(totacts$CAUSE, 1, 1) == "S")] <- "S"
+totacts$Cause[which(substr(totacts$CAUSE, 1, 1) == "H")] <- "H"
+totacts$Cause[which(substr(totacts$CAUSE, 1, 1) == "E")] <- "E"
+
+totacts$Cause <- factor(totacts$Cause)
+
+totacts$LightLevel <- rep(NA, nrow(totacts))
+totacts$VISIBLTY <- factor(totacts$VISIBLTY, labels = c("Dawn","Day","Dusk","Dark" ))
+totacts$LightLevel[which(totacts$VISIBLTY == "Dawn")] = "Dark"
+totacts$LightLevel[which(totacts$VISIBLTY == "Dusk")] = "Dark"
+totacts$LightLevel[which(totacts$VISIBLTY == "Day")] = "Day"
+totacts$LightLevel[which(totacts$VISIBLTY == "Dark")] = "Dark"
+
+totacts$WeatherObstruction <- rep(NA, nrow(totacts))
+totacts$WEATHER <- factor(totacts$WEATHER, labels = c("clear", "cloudy", 
+                                                       "rain", "fog","sleet","snow"))
+totacts$WeatherObstruction[which(totacts$WEATHER == "clear")] = "No Obstruction"
+totacts$WeatherObstruction[which(totacts$WEATHER == "cloudy")] = "No Obstruction"
+totacts$WeatherObstruction[which(totacts$WEATHER == "rain")] = "Obstruction"
+totacts$WeatherObstruction[which(totacts$WEATHER == "fog")] = "Obstruction"
+totacts$WeatherObstruction[which(totacts$WEATHER == "sleet")] = "Obstruction"
+totacts$WeatherObstruction[which(totacts$WEATHER == "snow")] = "Obstruction"
+
+##Build a data frame with only extreme accidents for ACCDMG
+
+dmgbox <- ggplot(totacts, aes(y=ACCDMG)) + geom_boxplot()
+upper <- ggplot_build(dmgbox)$data[[1]]$ymax
+xdmg <- totacts[totacts$ACCDMG > upper,]
+
+
+# remove 9/11
+xdmg <- xdmg[-179,]
+
+## Remove duplicates from xdmg and call new data frame xdmgnd
+xdmgnd <- xdmg[!(duplicated(xdmg[, c("INCDTNO", "YEAR", "MONTH", "DAY", "TIMEHR", "TIMEMIN")])),]
+rownames(xdmgnd) <- NULL
+```
+Also in this data creation some new variables get created, LightLevel and WeatherObstruction. LightLevel is either Dark or Day depending on VISIBILITY. If VISIBILITY is Day, then light level is Day, otherwise LightLevel is Dark. WeatherObstruction depends on WEATHER and is either Obstruction or No Obstruction. It is No Obstruction when WEATHER is clear or cloudy and Obstruction any other time. 
+
+
+Part 1: Hypothesis about ACCDMG
+First Hypothesis about TRNSPD and TYPTRK
+Null Hypothesis (H0): The interaction between TRNSPD and TYPTRK has 0 as the coefficient
+Alternate Hypothesis (H1): The interaction between TRNSPD and TYPTRK has a positive coefficient
+
+Our hypothesis is that trains moving at higher speed in train yards cause more damage than trains moving at those speeds on main track. This would make sense because yards aren't designed for high speed train movement, and there are lots of other trains and expensive things in train yards for them to damage if they are moving at high speeds.
+
+Second Hypothesis about LightLevel and Weather Obstruction
+Null Hypothesis: The interaction between LightLevel and WeatherObstruction has 0 as the coefficient
+Alternate Hypothesis: The interaction between LightLevel and WeatherObstruction has a negative coefficient
+
+Our hypothesis is that trains which have weather obstructions such as rain or snow at night will have higher ACCDMG than trains which have weather obstructions during the day. This would make sense as the darkness combined with the weather obstructions could lead to further reduced visability, leading to most costly accidents.
+
+We'll use the TRNSPD and TYPTRK variables to do analysis on the first hypothesis The TYPTRK variable has four levels (1 - main, 2 - yard, 3 - siding, 4 - industry) Because we are only looking at the difference between yard and main track, we'll subsection the data to only accidents on main or yard track, and turn TYPTRK into a factor
+
+```{r}
+yardOrMain = filter(xdmgnd, xdmgnd$TYPTRK %in% c(1,2))
+yardOrMain$TYPTRK[which(yardOrMain$TYPTRK == 1)] <- "Main"
+yardOrMain$TYPTRK[which(yardOrMain$TYPTRK == 2)] <- "Yard"
+yardOrMain$TRKTYP = as.factor(yardOrMain$TYPTRK)
+```
+
+We'll create a boxplot for high speed main track versus yard track damages, and one for low speed too
+```{r}
+highSpeed = filter(yardOrMain, yardOrMain$TRNSPD >= median(yardOrMain$TRNSPD))
+lowSpeed = filter(yardOrMain, yardOrMain$TRNSPD < median(yardOrMain$TRNSPD))
+ggplot(highSpeed, aes(log(ACCDMG))) + 
+  geom_boxplot() + 
+  ggtitle("Box Plot of log(ACCDMG) on High Speed Trains") + 
+  facet_wrap(~TYPTRK)
+ggplot(lowSpeed, aes(log(ACCDMG))) + 
+  geom_boxplot() + 
+  ggtitle("Box Plot of log(ACCDMG) on Low Speed Trains") + 
+  facet_wrap(~TYPTRK)
+```
+These plots show an increase in damage for higher speed trains on both main and yard tracks. The boxplot has a larger box and wisker for the main track, for both low and high speed, which likely comes from there being more accidents which happened on main tracks. We do see that the median damages for main track increases from just under 13 to just over 13, whereas for the yard track the median increases from just over 12 to just under 13, which appears to be a slightly larger increase, thus also providing evidence that the higher speed yard track will have an larger increase in damages compared to the main track at higher speeds
+
+From here we'll plot the interaction between TRNSPD and TYPTRK based on ACCDMG to see whether there is more damage at higher speeds in the yards.
+
+```{r}
+Speed <- cut(yardOrMain$TRNSPD, c(min(yardOrMain$TRNSPD),median(yardOrMain$TRNSPD),max(yardOrMain$TRNSPD)), include.lowest = T, labels = c("low speed", "high speed"))
+interaction.plot(Speed, yardOrMain$TYPTRK, yardOrMain$ACCDMG)
+```
+This graph shows that there at higher speeds there appears to be more accident damage in the yard, whereas at lower speeds there is more accident damage on the main tracks, which supports the idea that high speed yard trains are more dangerous than high speed main track trains. This would show up in an interaction variable between TNRSPD and TYPTRK where we would have a significant positive value, because if the TYPTRK is yard, then having TRNSPD increase would have more of an effect on ACCDMG.
+
+For the second hypothesis we'll use LightLevel and WeatherObstruction which were created earlier. We'll start by plotting the interaction between them.
+
+```{r}
+a = ggplot(data = xdmgnd%>%filter(WeatherObstruction=="Obstruction"), aes(x = LightLevel, y = ACCDMG)) +
+  geom_boxplot() +
+  coord_flip() +
+  scale_fill_grey(start = 0.5, end = 0.8) +
+  theme(plot.title = element_text(hjust = 0.5))+
+  ggtitle("Box Plots of LightLevel vs log(ACCDMG) with Weather Obstruction")+
+  labs(y = "ACCDMG", x = "LightLevel")
+b = ggplot(data = xdmgnd%>%filter(WeatherObstruction=="No Obstruction"), aes(x = LightLevel, y = ACCDMG)) +
+  geom_boxplot() +
+  coord_flip() +
+  scale_fill_grey(start = 0.5, end = 0.8) +
+  theme(plot.title = element_text(hjust = 0.5))+
+  ggtitle("Box Plots of LightLevel vs log(ACCDMG) without Weather Obstruction")+
+  labs(y = "ACCDMG", x = "LightLevel")
+ggarrange(a, b, ncol=1, nrow=2)
+
+interaction.plot(xdmgnd$LightLevel, xdmgnd$WeatherObstruction, xdmgnd$ACCDMG)
+```
+This interaction shows significantly less damage during the day with weather obstructions then when obstructions are present at dark times, which supports there being a significant interaciton between the variables.
+
+Part 2: Model selection
+
+a) The feature and model selection technique used to select this model
+For this model we'll start by controlling for a large amount of variables, to make sure we can isolate the interaction between TRNSPD and TYPTRK and the interaction between LightLevel and WeatherObstruction, and use backwards selection to reach the best possible model.
+We'll start with TYPTRK, TRNSPD, LightLevel, WeatherObstruction, CARSHZD, and TONS, and the interactions between all of these. All of these could impact the amount of damage caused by an accident. We need TYPTRK, TRNSPD, LightLevel, and WeatherObstruction because they are the variables we are testing. CARSHZD is the number of cars carrying hazardous material which opened, which is important because we want to account for the fact that trains in the yard might not have hazardous material loaded in them, as they are being moved around, whereas main track trains will, and hazardous material can be a large source of accident damage. Also cars with hazardous material in them might not be transported at night, so this will account for any difference in transport times for these potentially damaging cars. TONS is another way of handling the fact that trains in the yard might be empty, as a heavier train could do more damage due to it's kinetic energy, thus it is important to account for it so we can compare directly the same weight trains in and out of the yard. We also want to account for this as heavier trains might be more likely to slip on the tracks, so weather types might have an impact in that way, whereas we are just focusing on the impact of weather on visibility, not the physical effects of it.
+b) Your treatment of ordinal and categorical variables
+For all of our categorical variables (TYPTRK, LightLevel, WeatherObstruction) we used dummy variables to represent them. 
+
+From here we'll create the model using the above variables:
+```{r}
+firstModel = lm(ACCDMG ~ (TYPTRK + TRNSPD + LightLevel + WeatherObstruction + CARSHZD + TONS)^2, data = yardOrMain)
+summary(firstModel)
+```
+From this first model we'll use backwards regression to make sure all of the important parameters are being used
+```{r}
+secondModel = step(firstModel, trace = F)
+summary(secondModel)
+```
+This new model shows us that the interaction between TRNSPD and TYPTRK was not significant and that the interaction between LightLevel and WeatherObstruction was also not significant. However, we'll make sure this model is good based off diagnostics.
+c) How you assesed your model
+We assesed this model using AIC for the backwards step process.
+d) How you diagnosed problems with your model
+We'll start by checking the residuals vs. fitted plot
+```{r}
+autoplot(secondModel, which = 1)
+```
+From this we can see that the mean does appear to be centered around 0, but there appears to be non constant variance. We'll check this with the Breusch-Pagan test
+```{r}
+ols_test_breusch_pagan(secondModel)
+```
+This shows that we should probably adjust the response parameter to have more constant variance. We'll also look at the QQ plot to see if the responses are normally distributed
+```{r}
+autoplot(secondModel, which = 2)
+```
+We can see that ACCDMG is not normally distributed from this plot, and that there is one entry with a Cook's distance greater than 0.5, which we will remove.
+e) How you adjusted the model based off those assessments
+From all of these we'll start by adjusting ACCDMG using a boxcox transformation
+```{r}
+boxcox(secondModel)
+```
+From this we can see that we'll need to do a boxcox transformation with lambda = -0.5, giving us a new variable for the following model.
+```{r}
+thirdModel = lm((ACCDMG^(-0.5) - 1)/(-0.5) ~ (TYPTRK + TRNSPD + LightLevel + WeatherObstruction + CARSHZD + TONS)^2, data = yardOrMain)
+summary(thirdModel)
+fourthModel = step(thirdModel, trace = F)
+summary(fourthModel)
+```
+We'll then do the same diagnotstics on the new fourth model
+```{r}
+autoplot(fourthModel, which = c(1,2,4))
+```
+The data seems to be good, it now looks normally distributed by the QQ plot, and the Cook's distances of all variables are low, so we'll check the Breusch-Pagen test again.
+
+```{r}
+ols_test_breusch_pagan(fourthModel)
+```
+This still shows that variance of our residuals was not equal, however we have already transformed the response variable, so we will accept this as a better result then before.
+
+Our first null hypothesis was that the interaction between TYPTRK and TRNSPD would be 0, and the alternate hypthosis was that it would be non-zero. Given modelThree from above, and the t-test in this model, it can be shown that we can reject the null hypothesis at the p = 0.22 level, which is much higher than the 0.05 level we usually use for rejecting the null hypothesis. This means that we are unable to reject the first null hypothesis.
+We can also see from our backwards regression, that this interaction was removed, as it does not make the model any more significant based off AIC.
+
+Our second null hypothesis was that the interaction between LightLevel and WeatherObstruction would be 0. Given modelThree and the t-test done for that model we can see that we would reject the null hypothesis at the p = 0.72 level, which is higher then the 0.05 level we usally reject at. This means we are unable to reject the null hypthesis. We can also see from our backwards regression, that this interaction was removed, as it does not make the model any more significant based off AIC.
+
+However we are still able to make recommendations from the model that we have. Firstly, we actually see that the weight of the trains reduce damage in this model, and this is statistically significant at the p = 0.05 level. This means that the FRA shouldn't worry about making trains heavier. The second important thing is the interaction between Yard track type, and hazard cars. It is statistically significant at the p = 0.05 level, and shows that if a car has hazardous material and it opens, this will cause more damage then each car that opens on a main track. This could lead to the FRA making sure that cars carrying hazardous material are kept out of yards as much as possible. The FRA could make trains empty hazardous material cars before they enter yards. Another option is in areas where there are lots of trains with hazardous material going into a yard, making a separate yard for hazardous material which is more resilient and able to handle accidents better, and making sure any trains with hazardous material go in there. We can see that the interaction between TRNSPD and WeatherObstruction has a positive coefficient, and while it's not significant at the 0.05 level, it may still be useful to add some rules reducing train speeds when the weather is obstructive, such as rainy or snowy.
